@@ -10,6 +10,8 @@
 #include <sys/epoll.h>
 #include <vector>
 #include <fcntl.h>
+#include "resp_parser.cpp"
+#include "resp_serializer.cpp"
 
 // Set the socket to non-blocking mode
 bool set_non_blocking(int fd)
@@ -188,11 +190,50 @@ int main(int argc, char **argv)
           }
 
           buffer[bytes_received] = '\0';
-          std::cout << "Received from client " << client_fd << ": " << buffer;
+          // std::cout << "Received from client " << client_fd << ": " << buffer;
 
-          std::string response = "+PONG\r\n";
-          std::cout << "Sending response: " << response << std::endl;
-
+          std::string response;
+          try
+          {
+            RESPParser parser;
+            RESPValue value = parser.parse(buffer);
+            if (value.type == RESPValue::Type::ARRAY && !value.array_value.empty())
+            {
+              const RESPValue &cmd = value.array_value[0];
+              if (cmd.type == RESPValue::Type::BULK_STRING)
+              {
+                std::string command = cmd.str_value;
+                for (auto &c : command)
+                  c = toupper(c);
+                if (command == "PING")
+                {
+                  response = "+PONG\r\n";
+                }
+                else if (command == "ECHO")
+                {
+                  std::string array_command = RESPSerializer::serializeBulkString(value.array_value[1].str_value);
+                  write(client_fd, array_command.c_str(), array_command.size());
+                  continue;
+                }
+                else
+                {
+                  response = "-ERR unknown command\r\n";
+                }
+              }
+              else
+              {
+                response = "-ERR invalid command format\r\n";
+              }
+            }
+            else
+            {
+              response = "-ERR invalid command format\r\n";
+            }
+          }
+          catch (const std::exception &ex)
+          {
+            response = "-ERR parse error\r\n";
+          }
           write(client_fd, response.c_str(), response.size());
         }
       }
